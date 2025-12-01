@@ -1,101 +1,263 @@
+# -*- coding: utf-8 -*-
+import os
+import io
+from datetime import datetime, date
+
 import requests
 from bs4 import BeautifulSoup
-import re
+import pandas as pd
+import streamlit as st
 
-class naverWeather():
-    session = requests.Session() 
-    addr = "http://weather.naver.com/rgn/cityWetrCity.nhn?cityRgnCd=CT"
-    map_cityNum = {     # 지역 번호 매핑
-            '가평':"001001", '강화':"001002", '고양':"001003", '과천':'001004','광명':"001005" , 
-            '광주':"001006", '구리':"001007", '군포':"001008", '김포':"001009", '남양주':"001010",
-            '동두천':"001011", '문산':"001035", '부천':"001012", '서울':"001013", '성남':'001014',
-            '수원':"001015", '시흥':"001016", '신갈':"001034", '안산':"001017", '안성':'001018',
-            '안양':"001019", '양주':"001020", '양평':"001021", '여주':"001036", '연천':"001022", 
-            '오산':"001023", '용인':"001024", '의왕':"001025", '의정부':"001026", '이천':"001027", 
-            '인천':"001028", '파주':"001029", '평택':"001030", '포천':"001031", '하남':"001032", '화성':"001033",
 
-            '백령도':"002001", '소청도':"002002", '연평도':"002003",
+# -----------------------------
+# 네이버 뉴스 1건 상세 가져오기
+# -----------------------------
+def get_news(n_url: str):
+    """
+    개별 네이버 뉴스 기사 페이지에서
+    제목, 날짜, 본문, 언론사, 링크를 추출합니다.
+    """
+    news_detail = {
+        "date": "",
+        "company": "",
+        "title": "",
+        "content": "",
+        "link": n_url,
+    }
 
-            '양구':"003001", '영월':"003002", '원주':"003003", '인제':"003004", '정선':"003005", 
-            '철원':"003006", '춘천':"003007", '평창':"003008", '홍천':"003009", '화천':"003010", 
-            '횡계':"003012", '횡성':"003011",
-            
-            '강릉':"004001", '강원':"004002", '산간':"004003", '고성':"004004", '대관령':"004005", 
-            '동해':"004006", '삼척':"004007", '새말':"004011", '속초':"004007", '양양':"004008", 
-            '태백':"004009",
+    try:
+        breq = requests.get(n_url, timeout=5)
+        breq.raise_for_status()
+    except Exception as e:
+        # 요청 실패 시 비어있는 데이터 반환
+        print(f"요청 실패: {n_url} / {e}")
+        return news_detail
 
-            '괴산':"005001", '남이':"005013", '단양':"005002", '보은':"005003", '영동':"005004", 
-            '옥천':"005005", '음성':"005006", '제천':"005007", '증평':"005008", '진천':"005009", 
-            '청원':"005014", '청주':"005010", '추풍령':"005011", '충주':"005012",
+    bsoup = BeautifulSoup(breq.content, "html.parser")
 
-            '계룡':"006016", '공주':"006001", '금산':"006002", '논산':"006003", '당진':"006004", 
-            '대전':"006005", '보령':"006006", '부여':"006007", '서산':"006008", '서천':"006009", 
-            '세종':"006017", '아산':"006010", '예산':"006011", '천안':"006012", '청양':"006013", 
-            '태안':"006014", '홍성':"006015",
+    # 제목 추출 (네이버 뉴스 구조 변경 대응)
+    title_el = (
+        bsoup.select_one("h2#title_area")  # 새 구조
+        or bsoup.select_one("h3#articleTitle")  # 예전 구조
+    )
+    if title_el:
+        news_detail["title"] = title_el.get_text(strip=True)
 
-            '경산':"007001", '경주':"007002", '고령':"007003", '구미':"007004", '군위':"007005", 
-            '김천':"007006", '대구':"007007", '문경':"007008", '봉화':"007009", '상주':"007010", 
-            '성주':"007011", '안동':"007012", '영덕':"007013", '영양':"007014", '영주':"007015", 
-            '영천':"007016", '예천':"007017", '울진':"007018", '의성':"007019", '청도':"007020", 
-            '청송':"007021", '칠곡':"007022", '포항':"007023",
+    # 날짜 추출
+    # 새 구조: span.media_end_head_info_datestamp_time / 옛 구조: .t11
+    pdate_el = (
+        bsoup.select_one("span.media_end_head_info_datestamp_time")
+        or bsoup.select_one(".t11")
+    )
+    if pdate_el:
+        news_detail["date"] = pdate_el.get_text(strip=True)[:16]
 
-            '거제':"008001", '거창':"008002", '고성':"008003", '김해':"008004", '남해':"008005", 
-            '밀양':"008007", '부산':"008008", '사천':"008009", '산청':"008010", '서상':"008024", 
-            '양산':"008011", '울산':"008012", '의령':"008013", '진주':"008014", '창녕':"008016", 
-            '창원':"008017", '통영':"008018", '하동':"008019", '하동(내륙)':"008020", '함안':"008021", 
-            '함양':"008022", '합천':"008023",
+    # 본문 추출
+    body_el = (
+        bsoup.select_one("article#dic_area")  # 새 구조
+        or bsoup.select_one("#articleBodyContents")  # 옛 구조
+    )
+    if body_el:
+        text = body_el.get_text(" ", strip=True)
+        # 플래시 우회 문구 제거(예전 구조)
+        text = text.replace(
+            "// flash 오류를 우회하기 위한 함수 추가 function _flash_removeCallback() {}",
+            "",
+        )
+        news_detail["content"] = text.strip()
 
-            '독도':"009001", '울릉도':"009002",
+    # 언론사 추출 (새/구조 혼합 대응)
+    company_el = (
+        bsoup.select_one("a.media_end_head_top_logo")  # 새 구조
+        or bsoup.select_one("#footer address a")  # 예전 구조
+    )
+    if company_el:
+        news_detail["company"] = company_el.get_text(strip=True)
 
-            '고창':"010001", '군산':"010002", '김제':"010003", '남원':"010004", '무주':"010005", 
-            '부안':"010006", '순창':"010007", '완주':"010014", '익산':"010008", '임실':"010009", 
-            '장수':"010010", '전주':"010011", '정읍':"010012", '진안':"010013",
+    return news_detail
 
-            '강진':"011001", '고흥':"011002", '곡성':"011003", '광양':"011004", '광주':"011005", 
-            '구례':"011006", '나주':"011007", '담양':"011008", '목포':"011009", '무안':"011010", 
-            '보성':"011011", '순천':"011012", '신안':"011013", '여수':"011014", '영광':"011015", 
-            '영암':"011016", '완도':"011017", '장성':"011018", '장흥':"011019", '진도':"011020", 
-            '함평':"011021", '해남':"011022", '화순':"011024", '흑산도':"011023",
 
-            '고산':"012001", '서귀포':"012002", '성산포':"012003", '윗세오름':"012004", 
-            '제주':"012005"
-            }
+# -----------------------------
+# 네이버 뉴스 검색 결과 크롤러
+# -----------------------------
+def crawler(max_page: int, query: str, s_date: str, e_date: str) -> pd.DataFrame:
+    """
+    max_page: 최대 검색 페이지 수 (1페이지당 10건, 네이버 기준)
+    query   : 검색어
+    s_date  : 시작일자 'YYYY.MM.DD'
+    e_date  : 종료일자 'YYYY.MM.DD'
+    """
+    s_from = s_date.replace(".", "")
+    e_to = e_date.replace(".", "")
 
-    def __init__(self, area="서울"):
-        self.area = area
-        self.addr = None
-        self.result = None
-        
-        cityNum = naverWeather.map_cityNum[area]
-        if not cityNum:
-            print("도시명 잘못")
-            # 잘못된 도시명을 입력한 경우
-            return
-        self.addr = naverWeather.addr + cityNum
-        
-        self.search()
+    page = 1
+    maxpage_t = (max_page - 1) * 10 + 1  # 1,11,21,...
 
-    def search(self):
-        naverWeather.session.encoding = 'utf-8'
+    results = []
 
-        req = naverWeather.session.get(self.addr)
-        soup = BeautifulSoup(req.text, "html.parser")
-        table = soup.find(class_="tbl_weather tbl_today3")
-       
-        t_ary = list(table.stripped_strings)
+    while page <= maxpage_t:
+        url = (
+            "https://search.naver.com/search.naver"
+            f"?where=news&query={query}"
+            f"&sort=0&ds={s_date}&de={e_date}"
+            f"&nso=so%3Ar%2Cp%3Afrom{s_from}to{e_to}%2Ca%3A&start={page}"
+        )
 
-        self.result = (
-                "["+ self.area + " 날씨 검색 결과]\n"
-                + "- 오늘(" + t_ary[3] + ")\n"
-                + "\t오전 - " + t_ary[7] + "℃(" +  t_ary[9] + ", 강수확률 " + t_ary[11] + ")\n"
-                + "\t오후 - " + t_ary[13] + "℃(" +  t_ary[15] + ", 강수확률 " + t_ary[17] + ")\n"
-                + "- 내일(" + t_ary[5] + ")\n"
-                + "\t오전 - " + t_ary[19] + "℃(" +  t_ary[21] + ", 강수확률 " + t_ary[23] + ")\n"
-                + "\t오후 - " + t_ary[25] + "℃(" +  t_ary[27] + ", 강수확률 " + t_ary[29] + ")\n"
+        print("요청 URL:", url)
+        try:
+            req = requests.get(url, timeout=5)
+            req.raise_for_status()
+        except Exception as e:
+            print("검색 페이지 요청 실패:", e)
+            page += 10
+            continue
+
+        soup = BeautifulSoup(req.content, "html.parser")
+
+        # 1) 새 구조: a.news_tit
+        link_tags = soup.select("a.news_tit")
+        # 2) 구 구조: a._sp_each_url (없을 수도 있음)
+        if not link_tags:
+            link_tags = soup.select("a._sp_each_url")
+
+        if not link_tags:
+            print("뉴스 링크를 찾지 못했습니다.")
+            break
+
+        for a_tag in link_tags:
+            href = a_tag.get("href", "")
+            if not href:
+                continue
+            # 네이버 뉴스 도메인만 크롤링
+            if not href.startswith("https://news.naver.com"):
+                continue
+
+            news_detail = get_news(href)
+            if news_detail["title"]:  # 제목 없는 경우는 스킵
+                results.append(
+                    {
+                        "date": news_detail["date"],
+                        "company": news_detail["company"],
+                        "title": news_detail["title"],
+                        "content": news_detail["content"],
+                        "link": news_detail["link"],
+                    }
                 )
 
-    def getWeather(self):
-        if not self.result:
-            # 도시명을 잘못 입력한 경우 결과가 나오지 않는다.
-            return "잘못된 도시명입니다"
-        return self.result
+        page += 10
+
+    if results:
+        df = pd.DataFrame(results)
+    else:
+        df = pd.DataFrame(columns=["date", "company", "title", "content", "link"])
+
+    return df
+
+
+# -----------------------------
+# Streamlit UI
+# -----------------------------
+def main():
+    st.set_page_config(
+        page_title="네이버 뉴스 크롤러",
+        page_icon="📰",
+        layout="wide",
+    )
+
+    st.title("📰 네이버 뉴스 크롤링 웹 앱")
+    st.markdown(
+        """
+        네이버 뉴스에서 특정 **검색어 + 기간**으로 뉴스를 크롤링하고,<br>
+        결과를 **화면에서 확인**하거나 **CSV/엑셀로 다운로드**할 수 있습니다.
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+
+    # 입력 폼
+    with st.form(key="search_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            query = st.text_input("검색어", value="파이썬", placeholder="예: 인공지능, 경제, 주식 등")
+            max_page = st.number_input(
+                "최대 검색 페이지 수 (1페이지당 약 10건)",
+                min_value=1,
+                max_value=50,
+                value=3,
+            )
+
+        with col2:
+            today = date.today()
+            s_date = st.date_input("시작 날짜", value=today.replace(day=1))
+            e_date = st.date_input("끝 날짜", value=today)
+
+        submitted = st.form_submit_button("크롤링 시작하기 🕵️‍♂️")
+
+    if submitted:
+        if not query.strip():
+            st.error("검색어를 입력해 주세요.")
+            return
+
+        if s_date > e_date:
+            st.error("시작 날짜가 끝 날짜보다 클 수 없습니다.")
+            return
+
+        # 날짜 문자열 포맷 맞추기
+        s_date_str = s_date.strftime("%Y.%m.%d")
+        e_date_str = e_date.strftime("%Y.%m.%d")
+
+        with st.spinner("네이버 뉴스를 크롤링하는 중입니다..."):
+            df = crawler(
+                max_page=int(max_page),
+                query=query,
+                s_date=s_date_str,
+                e_date=e_date_str,
+            )
+
+        if df.empty:
+            st.warning("검색 결과가 없습니다. 검색어 또는 기간을 변경해 보세요.")
+            return
+
+        st.success(f"총 {len(df)}개의 기사를 가져왔습니다.")
+
+        # 데이터 미리보기
+        st.subheader("📄 크롤링 결과 미리보기")
+        st.dataframe(df, use_container_width=True)
+
+        # 다운로드 버튼
+        st.markdown("### 📥 데이터 다운로드")
+
+        # CSV 다운로드
+        csv_buffer = df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label="CSV 다운로드",
+            data=csv_buffer,
+            file_name=f"naver_news_{query}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
+
+        # 엑셀 다운로드 (openpyxl 필요)
+        try:
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="news")
+            excel_buffer.seek(0)
+
+            st.download_button(
+                label="엑셀(xlsx) 다운로드",
+                data=excel_buffer,
+                file_name=f"naver_news_{query}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception as e:
+            st.info(
+                "엑셀 다운로드 중 문제가 발생했습니다. "
+                "requirements.txt에 `openpyxl`을 추가했는지 확인해 주세요."
+            )
+            print("Excel export error:", e)
+
+
+if __name__ == "__main__":
+    main()
